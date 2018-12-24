@@ -1,0 +1,295 @@
+#lang racket
+(require redex)
+(require redex/reduction-semantics)
+(provide (all-defined-out))
+
+
+(define-language equs
+  (step ((equ ...) (var ...) (equ ...) (equ ...)));ginving equ, requesting, request equ, solved equs
+  (syst ((var var ...) (equ equ ...) (syst ...)));systms are independent and do not flow information fowerd
+  (equ (exp exp))
+  (exp add sub mul div number var)
+  (add (+ exp exp))
+  (sub (- exp exp))
+  (mul (* exp exp))
+  (div (/ exp exp))
+  (var (string number number)); name_num dirnum
+  )
+
+(define-metafunction equs
+  var=? : var var -> number
+  ((var=? (string_name number_n number_d) (string_name number_n number_d))
+   1)
+  ((var=? var var)
+   0)
+  )
+
+(define-metafunction equs
+  replace : exp var exp -> exp
+  ((replace (+ exp_1 exp_2) var_r exp_3)
+   (+ (replace exp_1 var_r exp_3) (replace exp_2 var_r exp_3)))
+  ((replace (- exp_1 exp_2) var_r exp_3)
+   (- (replace exp_1 var_r exp_3) (replace exp_2 var_r exp_3)))
+  ((replace (* exp_1 exp_2) var_r exp_3)
+   (* (replace exp_1 var_r exp_3) (replace exp_2 var_r exp_3)))
+  ((replace (/ exp_1 exp_2) var_r exp_3)
+   (/ (replace exp_1 var_r exp_3) (replace exp_2 var_r exp_3)))
+  ((replace number_n var_r exp_1)
+   number_n)
+  ((replace var_r var_r exp_1)
+   exp_1)
+  ((replace var_nr var_r exp_1)
+   var_nr)
+  )
+;(term (replace  (+ 1 (/("v" 1 1) ("v" 2 1))) ("v" 1 1) 2))
+
+(define-metafunction equs
+  ret-unsolved : exp any -> any
+  ((ret-unsolved (+ exp_1 exp_2)any_l)
+   ,(let* ((left (term(ret-unsolved exp_1 any_l)))
+           (right (term(ret-unsolved exp_2 ,left))))
+      right))
+  ((ret-unsolved (- exp_1 exp_2) any_l)
+   ,(let* ((left (term(ret-unsolved exp_1 any_l)))
+           (right (term(ret-unsolved exp_2 ,left))))
+      right))
+  ((ret-unsolved (* exp_1 exp_2) any_l)
+   ,(let* ((left (term(ret-unsolved exp_1 any_l)))
+           (right (term(ret-unsolved exp_2 ,left))))
+      right))
+  ((ret-unsolved (/ exp_1 exp_2) any_l)
+   ,(let* ((left (term(ret-unsolved exp_1 any_l)))
+           (right (term(ret-unsolved exp_2 ,left))))
+      right))
+  ((ret-unsolved number_n any_l)
+   any_l)
+  ((ret-unsolved var_nr any_l)
+   ,(if (member (term var_nr) (term any_l))
+        (term any_l)
+        (cons (term var_nr) (term any_l))))
+  )
+
+
+(define-metafunction equs
+  contain# : var exp -> number
+ ((contain# var_r (+ exp_1 exp_2))
+  ,(+ (term (contain# var_r exp_1)) (term (contain# var_r exp_2))))
+  ((contain# var_r (- exp_1 exp_2))
+  ,(+ (term (contain# var_r exp_1)) (term (contain# var_r exp_2))))
+  ((contain# var_r (* exp_1 exp_2))
+  ,(+ (term (contain# var_r exp_1)) (term (contain# var_r exp_2))))
+  ((contain# var_r (/ exp_1 exp_2))
+  ,(+ (term (contain# var_r exp_1)) (term (contain# var_r exp_2))))
+  ((contain# var_r number_n)
+   0)
+  ((contain# var_r var_r)
+   1)
+  ((contain# var_r var_nr)
+   0)
+  )
+;(term (contain# ("v" 1 1) 1))
+;(term (contain# ("v" 1 1) ("v" 1 2)))
+;(term (contain# ("v" 1 1) ("v" 1 1)))
+;(term (contain# ("v" 1 1) (+ 1("v" 1 2))))
+;(term (contain# ("v" 1 1) (+ 1 (/("v" 1 1) ("v" 1 1)))))
+
+(define-metafunction equs
+  contain? : var exp -> boolean
+ ((contain? var_r exp_r)
+  ,(<= 1 (term (contain# var_r exp_r))))
+  )
+;(term (contain? ("v" 1 1) 1))
+;(term (contain? ("v" 1 1) ("v" 1 2)))
+;(term (contain? ("v" 1 1) ("v" 1 1)))
+;(term (contain? ("v" 1 1) (+ 1("v" 1 2))))
+;(term (contain? ("v" 1 1) (+ 1 (/("v" 1 1) ("v" 2 1)))))
+(define-metafunction equs
+  equcont : equ var -> boolean
+  ((equcont (exp_1 exp_2) var)
+   ,(or (term (contain? var exp_1))
+        (term (contain? var exp_2))
+        )))
+(define-metafunction equs
+  equrep : equ equ -> equ
+  ((equrep (exp_1 exp_2) (var_r exp_3))
+   ((replace exp_1 var_r exp_3) (replace exp_2 var_r exp_3)))
+  )
+
+(define-metafunction equs
+  mull-through : exp exp var -> exp
+  ((mull-through (+ exp_1 exp_2) exp_r var_r)
+   (+ (mull-through exp_1 exp_r var_r) (mull-through exp_2 exp_r var_r)))
+  ((mull-through (- exp_1 exp_2) exp_r var_r)
+   (- (mull-through exp_1 exp_r var_r) (mull-through exp_2 exp_r var_r)))
+  ((mull-through (* exp_1 exp_2) exp_r var_r)
+   ,(let ((in-l (term (contain? var_r exp_1)))
+          (in-r (term (contain? var_r exp_2))))
+      (cond
+        ((and in-r in-l) (error 'mul-through "multible x's"))
+        (in-l (term (mull-through exp_1 (* exp_2 exp_r) var_r)))
+        (in-r (term (mull-through exp_2 (* exp_1 exp_r) var_r)))
+        (else (term (* exp_r (* exp_1 exp_2))));avoid foil multiplication
+        )))
+  ((mull-through (/ exp_1 exp_2) exp_r var_r)
+        ,(cond
+           ((term (contain? var_r exp_2)) (error 'mul-through "cannot handle x's under /"))
+           (else (term (mull-through exp_1 (/ exp_r exp_2) var_r)))))
+  ((mull-through var_n exp_r var_r)
+   (* exp_r var_n))
+  ((mull-through number_n exp_r var_r)
+   (* exp_r number_n))
+  )
+
+;(term (mull-through (* (+ 2 3) (+ ("v" 1 1) 3)) 1 ("v" 1 1)))
+;(term (mull-through (* (+ 2 3) (+ ("v" 1 1) 3)) 1 ("v" 2 1)))
+;(term (mull-through (* 2 (+ (+ (* (+ 1 2) ("v" 1 1))
+ ;                                  (* (+ ("v" 1 1) 2) ("d" 2 1)))
+  ;                            (/ (- ("v" 1 1) 1) (- 4 2)))) 1 ("v" 1 1)))
+(define-metafunction equs
+  factr1 : exp var -> exp;given containment
+  ((factr1 exp_r var_r)
+   ,(if (= 1 (term (contain# var_r exp_r))) (term (replace exp_r var_r 1))
+        (error 'factr1 "either no x or more that 1 possibly given add x x")))
+  )
+
+(define-metafunction equs
+  const/nonfd : exp var -> any
+  ((const/nonfd (+ exp_1 exp_2) var_r)
+   ,(let ((aux-l (term (const/nonfd exp_1 var_r)))
+          (aux-r (term (const/nonfd exp_2 var_r))))
+      (cons (term (+ ,(car aux-l) ,(car aux-r))) (term (+ ,(cdr aux-l) ,(cdr aux-r))))
+      ))
+  ((const/nonfd (- exp_1 exp_2) var_r)
+   ,(let ((aux-l (term (const/nonfd exp_1 var_r)))
+          (aux-r (term (const/nonfd exp_2 var_r))))
+      (cons (term (- ,(car aux-l) ,(car aux-r))) (term (- ,(cdr aux-l) ,(cdr aux-r))))
+      ))
+  ((const/nonfd mul_v var_r)
+   ,(cond
+      ((term (contain? var_r mul_v)) (cons 0 (term (factr1 mul_v var_r))))
+      (else (cons (term mul_v) 0))
+      ))
+  ((const/nonfd div_v var_r)
+   ,(cond
+      ((term(contain? var_r div_v)) (cons 0 (term (factr1 div_v var_r))))
+      (else (cons (term mull_v) 0))
+      ))
+  ((const/nonfd var_r var_r)
+   ,(cons 0 1))
+  ((const/nonfd var_v var_r)
+   ,(cons (term var_v) 0))
+  ((const/nonfd number_n var_r)
+   ,(cons (term number_n) 0))
+  )
+;(term (const/nonfd (mull-through (* (+ 2 3) (+ ("v" 1 1) 3)) 1 ("v" 1 1))("v" 1 1)))
+;(term (const/nonfd (mull-through (* 2 (+ (+ (* (+ 1 2) ("v" 1 1))
+ ;                                  (* (+ ("v" 1 1) 2) ("d" 2 1)))
+  ;                           (/ (- ("v" 1 1) 1) (- 4 2)))) 1 ("v" 1 1))
+   ;             ("v" 1 1)))
+
+(define-metafunction equs
+  solve : equ var -> equ
+  ((solve (exp_l exp_r) var_v)
+   ,(let* ((mlcn (term (const/nonfd(mull-through exp_l 1 var_v)var_v)))
+           (mrcn (term (const/nonfd(mull-through exp_r 1 var_v)var_v))))
+      (term (var_v (/ (- ,(car mlcn) ,(car mrcn)) (- ,(cdr mrcn) ,(cdr mlcn)))))
+      )))
+;(term(solve ((* 3 (+ (* 2 ("p" 1 1)) ("x" 1 1))) (+ 5 (- ("x" 1 1) (* ("x" 1 1) 3)))) ("x" 1 1)))
+
+
+(define-metafunction equs
+  solve-steps : syst ... -> step
+  ((solve-steps syst ...)
+   ,(foldr (λ (x y) (map append x y)) '(() () ()) (term ((solve-dif syst)...))))
+  )
+
+(define-metafunction equs
+  solve_for : var equ ... -> any
+  ((solve_for var_s equ_c1 equ_cs ...)
+   ,(let ((c1_vars (term (get-dirs-var equ_c1))))
+     (if (and (=(length c1_vars)1) (term (equ=? var_s ,(first c1_vars))))
+         (term (solve equ_c1 var_s))
+         (term (solve_for var_s equ_cs ...)))))
+  ((solve_for var_s)
+   #f)
+  )
+
+
+(define-metafunction equs
+  part-solve-aux : equ equ (var ...) equ ... -> any
+  ((part-solve-aux equ_same (("null" -1 -nan.0) exp_v) (var_r ...) equ_e ...)
+   (part-solve-aux equ_same (0 exp_v) (var_r ...) equ_e ...))
+
+  ((part-solve-aux equ_same equ_add (var_same var_1 var_r ...) (var_1 var_1) equ_e ...)
+   (part-solve-aux equ_same equ_add (var_same var_r ...) equ_e ...))
+  
+  ((part-solve-aux equ_same equ_add (var_same var_1 var_r ...) equ_1 equ_e ...)
+   ,(if (term (equcont equ_1 var_1))
+       (let*((eq (term (equrep (solve equ_1 var_1) equ_same)))
+             ;(d (begin (print (term equ_1)) (newline) (print (term var_1)) (newline)
+              ;         (print (term equ_same)) (newline) (print eq)))
+             (ad(term(part-solve-aux equ_same (equrep equ_add ,eq) (var_same var_r ...) equ_e ...))))
+         (term (,(first ad) ,(cons eq (second ad)))))
+       (term (part-solve-aux equ_same equ_add (var_same var_r ...) equ_e ...))))
+
+  ((part-solve-aux equ_same equ_add (var_same))
+   (equ_add ()))
+  )
+
+(define-metafunction equs
+  get-unsolved : equ -> any
+  ((get-unsolved (exp_1 exp_2))
+   ,(append (term(ret-unsolved exp_1 ,null)) (term(ret-unsolved exp_2 ,null))))
+  )
+  
+(define-metafunction equs
+  part-solve+eq : (var ...) equ (equ equ ...) -> step
+  ((part-solve+eq (var_r ...) equ_sum (equ_same equ_comps ...));values in equ_sum in same order as equ_comps
+   ,(let* ((aux (term(part-solve-aux equ_same equ_sum (var_r ...)equ_comps ...)))
+          ; (d (print aux))
+          (aux-gets (term(get-unsolved ,(first aux)))))
+   (term ((equ_same)
+          ,aux-gets
+          (,(first aux))
+          ,(second aux))
+    )))
+  )
+(term (part-solve+eq (("V" 1 1) ("F" 2 1) ("F" 1 1))
+                     (("null" -1 +nan.0) (+ ("F" 2 1) (+ ("F" 1 1) 0)))
+                     ((("V" 1 1) 2)
+                     (("V" 1 1) (* 3 ("F" 2 1)))
+                     (("F" 1 1) ("F" 1 1))
+                     )))
+                      
+   
+   
+  
+;(define-metafunction equs
+;  solve-dif : syst -> step
+;  ((solve-dif ((var_same var_add_in var_add ...) (equ_sum equ_comps ...) ()))
+;   ;is same var solve
+;   ;is equ sum solved
+;   ;must contain 2 of R C I so one must be solved for
+;   ;only one can be solve for becouse feed in
+;   ,(let ((same/struct (term(get-same/restruct var_same equ_comps ...))));ret (equsame equ (var var) ...)
+;   (cond
+;     (same/struct (term(part-solve+eq (sanatize (var_same var_add ...)) equ_sum ,same/struct)))
+;     (else (full-solve+eq equ_sum equ_comps ...));gets previus variable same allows to find sum given 2 pre
+;   )))
+;  ((solve-dif ((var_same var_add_in var_add ...) (equ_sum equ_comps ...)  (syst ...)))
+;   ,(let ((instrs (term (solve-steps syst ...))))
+;      )
+;   )
+;
+;   
+;   )
+;   
+;
+
+
+
+
+
+
+
+

@@ -1,0 +1,5 @@
+#lang racket
+(require "equations.rkt")
+(require redex)
+(require redex/reduction-semantics)
+(provide (all-defined-out))
